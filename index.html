@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#E7EDE9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#10171A" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Tell Dr. Stillwell what's going on and get the right guided meditation for this moment.">
+  <title>Prescription Meditation</title>
+  <link rel="icon" href="/bell.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Figtree:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Young+Serif&display=swap">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="brass" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" style="stop-color:var(--brass-lo)"/>
+        <stop offset=".35" style="stop-color:var(--brass-hi)"/>
+        <stop offset=".6" style="stop-color:var(--brass)"/>
+        <stop offset="1" style="stop-color:var(--brass-lo)"/>
+      </linearGradient>
+    </defs>
+  </svg>
+
+  <!-- Sign-in -->
+  <section class="gate" id="gate" hidden>
+    <svg class="bell-svg gate-bell" id="gate-bell" aria-hidden="true"></svg>
+    <span class="licence">Licensed to prescribe stillness · Reg. PM-0001</span>
+    <h1>Prescription Meditation</h1>
+    <p class="lede">Tell Dr. Stillwell what's going on. You'll get one guided meditation for exactly how you are, dosed to the time you have.</p>
+    <button class="btn google" id="signin" type="button">
+      <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.8 1.1 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.2-.1-2.3-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3 0 5.8 1.1 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2c-2 1.5-4.5 2.4-7.2 2.4-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.2-.1-2.3-.4-3.5z"/></svg>
+      Continue with Google
+    </button>
+    <p class="gate-note" id="gate-note"></p>
+    <p class="fine">What you tell the doctor is sent to Google's Gemini AI to write your prescription. Your prescriptions are saved privately to your account.</p>
+  </section>
+
+  <!-- Setup needed -->
+  <section class="gate" id="setup" hidden>
+    <svg class="bell-svg gate-bell" aria-hidden="true"></svg>
+    <h1>Almost ready</h1>
+    <p class="lede">Add your Firebase web config to <code>.env.local</code> in the project folder, then restart <code>npm run dev</code>.</p>
+  </section>
+
+  <div class="app" id="app" hidden>
+    <header class="top">
+      <div class="brand">
+        <svg class="bell-svg" aria-hidden="true"></svg>
+        <div>
+          <div class="brand-name">Prescription Meditation</div>
+          <div class="oncall"><span class="dot"></span><span>Dr. Stillwell is on call</span></div>
+        </div>
+      </div>
+      <div class="tools">
+        <div class="patient" id="patient"></div>
+        <button class="icon-btn" id="sound" aria-pressed="true" aria-label="Bell sound" title="Bell sound">
+          <svg class="on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/></svg>
+          <svg class="off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>
+        </button>
+        <button class="btn small" id="signout" type="button">Sign out</button>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="Sections">
+        <button class="tab" role="tab" id="tab-consult" aria-selected="true" data-view="consult">Consult</button>
+        <button class="tab" role="tab" id="tab-fav" aria-selected="false" data-view="fav">Favourites <span class="count" id="fav-count"></span></button>
+        <button class="tab" role="tab" id="tab-file" aria-selected="false" data-view="file">Patient file <span class="count" id="file-count"></span></button>
+      </nav>
+    </header>
+
+    <main>
+      <section id="view-consult" role="tabpanel" aria-labelledby="tab-consult">
+        <div class="consult-head">
+          <svg class="bell-svg hero-bell" id="hero-bell" role="button" tabindex="0" aria-label="Ring the bell"></svg>
+          <span class="licence">Licensed to prescribe stillness · Reg. PM-0001</span>
+          <h1>A meditation for exactly how you are, right now</h1>
+          <div class="mode" role="radiogroup" aria-label="Consultation length" id="mode">
+            <button type="button" role="radio" aria-checked="true" data-mode="standard">Standard</button>
+            <button type="button" role="radio" aria-checked="false" data-mode="deep">Take your time</button>
+          </div>
+        </div>
+        <div class="thread" id="thread" aria-live="polite"></div>
+        <div class="next-step" id="next-step"></div>
+        <form class="composer" id="composer" autocomplete="off">
+          <div class="chips" id="time-chips">
+            <span class="lbl">Time I have:</span>
+            <button type="button" class="chip" data-min="3">3 min</button>
+            <button type="button" class="chip" data-min="5">5 min</button>
+            <button type="button" class="chip" data-min="10">10 min</button>
+            <button type="button" class="chip" data-min="20">20 min</button>
+            <button type="button" class="chip" data-min="45">45 min</button>
+          </div>
+          <div class="box">
+            <textarea id="msg" rows="1" placeholder="Tell me what's going on…" aria-label="Your reply to the doctor"></textarea>
+            <button class="mic" id="mic" type="button" aria-label="Speak your reply" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+            </button>
+            <button class="send" id="send" type="submit" aria-label="Send">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+          <p class="hint" id="hint">Type, or tap the microphone and talk.</p>
+        </form>
+      </section>
+
+      <section id="view-fav" role="tabpanel" aria-labelledby="tab-fav" hidden>
+        <div class="list-head"><h2>Favourites</h2><p>Prescriptions you've kept for repeat use.</p></div>
+        <div class="list" id="fav-list"></div>
+      </section>
+
+      <section id="view-file" role="tabpanel" aria-labelledby="tab-file" hidden>
+        <div class="list-head"><h2>Patient file</h2><p>Every prescription Dr. Stillwell has written for you, newest first.</p></div>
+        <div class="list" id="file-list"></div>
+      </section>
+    </main>
+
+    <footer>
+      Prescription Meditation offers relaxation guidance, not medical care. If you're in crisis, call your local emergency number. In the UK and Ireland, Samaritans answer on 116 123. In the US, call or text 988.
+    </footer>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

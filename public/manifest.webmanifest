@@ -1,0 +1,10 @@
+{
+  "name": "Prescription Meditation",
+  "short_name": "Rx Meditation",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#E7EDE9",
+  "theme_color": "#1E2A30",
+  "icons": [{ "src": "bell.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

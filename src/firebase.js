@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, updateDoc, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { getAI, getGenerativeModel, GoogleAIBackend } from 'firebase/ai';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 
 const env = import.meta.env;
 const config = {
@@ -19,6 +20,10 @@ export const MODEL = env.VITE_GEMINI_MODEL || 'gemini-3.6-flash';
 let auth, db, ai;
 if (configured) {
   const app = initializeApp(config);
+  // App Check proves requests come from this site, so nobody else can spend the free AI quota.
+  if (env.VITE_RECAPTCHA_SITE_KEY) {
+    initializeAppCheck(app, { provider: new ReCaptchaV3Provider(env.VITE_RECAPTCHA_SITE_KEY), isTokenAutoRefreshEnabled: true });
+  }
   auth = getAuth(app);
   db = getFirestore(app);
   ai = getAI(app, { backend: new GoogleAIBackend() });

@@ -34,6 +34,7 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
           VITE_GEMINI_MODEL: ${{ secrets.VITE_GEMINI_MODEL }}
           VITE_YOUTUBE_API_KEY: ${{ secrets.VITE_YOUTUBE_API_KEY }}
+          VITE_RECAPTCHA_SITE_KEY: ${{ secrets.VITE_RECAPTCHA_SITE_KEY }}
 
       # Android app (APK): a Trusted Web Activity that opens the live site full-screen.
       - uses: actions/setup-java@v4

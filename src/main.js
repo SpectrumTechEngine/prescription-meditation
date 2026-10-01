@@ -146,7 +146,7 @@ async function send(text) {
   if (!text || S.busy) return;
   stopListening();
   msg.value = ''; autosize();
-  addMsg('patient', text);
+  const mine = addMsg('patient', text);
   S.turns.push({ role: 'user', content: text });
   S.moodWords.push(text);
   S.patientTurns++;
@@ -167,8 +167,11 @@ async function send(text) {
     });
   } catch (e) {
     setBusy(false);
-    S.patientTurns--;                              // the next message stands in for this one
-    t.closest('.msg').remove();
+    // Take the message back so sending again doesn't repeat it in the chat or the doctor's notes.
+    S.patientTurns--; S.turns.pop(); S.moodWords.pop();
+    t.closest('.msg').remove(); mine.closest('.msg').remove();
+    if (!msg.value.trim()) { msg.value = text; autosize(); }
+    if (S.patientTurns === 0) lockMode(false);
     if (e?.name === 'AbortError') return;
     console.error(e);
     sysNote(errorCopy(e), true);

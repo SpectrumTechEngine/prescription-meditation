@@ -26,6 +26,15 @@ const ICON = {
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
 };
 
+/* ---------- Android app download (hidden inside the app itself) ---------- */
+const inApp = (() => {
+  try {
+    if (new URLSearchParams(location.search).get('source') === 'android') sessionStorage.setItem('pm-in-app', '1');
+    return sessionStorage.getItem('pm-in-app') === '1' || document.referrer.startsWith('android-app://');
+  } catch { return false; }
+})();
+if (!inApp && !import.meta.env.DEV) document.querySelectorAll('.get-app').forEach(a => { a.hidden = false; });
+
 /* ---------- screens & sign-in ---------- */
 function show(screen) {
   $('#setup').hidden = screen !== 'setup';

@@ -58,6 +58,8 @@ code { font-family: var(--f-mono); font-size: .9em; }
 .btn.google { background: var(--surface); padding: .75rem 1.3rem; font-size: 1rem; margin-top: .5rem; }
 .btn.google svg { width: 20px; height: 20px; }
 .gate-note { margin: 0; color: var(--warn); font-size: .9rem; min-height: 1.4em; }
+.btn.get-app { font-size: .88rem; }
+.footer-app { display: block; margin-bottom: .5rem; color: var(--brass); font-weight: 600; text-decoration: none; font-size: .85rem; }
 .fine { margin: 0; color: var(--ink-2); font-size: .78rem; max-width: 24rem; }
 
 /* Header */

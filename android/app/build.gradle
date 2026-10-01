@@ -1,0 +1,43 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The Android app is a Trusted Web Activity: it opens the live site full-screen in Chrome.
+// Signing values come from environment variables (GitHub secrets in CI).
+android {
+    namespace 'com.thespectrumtechengine.prescriptionmeditation'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.thespectrumtechengine.prescriptionmeditation'
+        minSdk 26
+        targetSdk 35
+        versionCode((System.getenv('VERSION_CODE') ?: '1') as int)
+        versionName '1.0.' + (System.getenv('VERSION_CODE') ?: '1')
+    }
+
+    signingConfigs {
+        release {
+            storeFile file(System.getenv('KEYSTORE_PATH') ?: '../release.keystore')
+            storePassword System.getenv('KEYSTORE_PASSWORD')
+            keyAlias 'prescription-meditation'
+            keyPassword System.getenv('KEYSTORE_PASSWORD')
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}

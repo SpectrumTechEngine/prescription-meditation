@@ -5,3 +5,9 @@ dist
 *.log
 .claude
 prescription-meditation.html
+android/release.keystore
+android/keystore-password.txt
+android/.gradle
+android/build
+android/app/build
+android/local.properties

@@ -5,16 +5,68 @@ import { geminiModel } from './firebase.js';
 // Keep it minimal for the short intake replies and low for the prescription.
 const THINK = { intake: { thinkingLevel: 'MINIMAL' }, rx: { thinkingLevel: 'LOW' } };
 
-/** Run a request, retrying once after a short pause if the service hiccups (401/429/5xx, network). */
-async function withRetry(run, signal) {
-  try { return await run(); }
-  catch (e) {
-    if (e?.name === 'AbortError' || signal?.aborted) throw e;
-    const transient = /fetch-error/.test(String(e?.code)) && !/\[(400|403|404)/.test(String(e?.message));
-    if (!transient) throw e;
-    await new Promise(r => setTimeout(r, 1200 + Math.random() * 800));
-    return run();
+// Each Gemini model has its own small free daily allowance, so the work is spread across several.
+// Short follow-up questions start on the lite model; the prescription starts on the strongest.
+const CHAINS = {
+  intake: ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.8-flash'],
+  rx: ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'],
+};
+
+/* Remember which models are out of allowance (on this device) so we don't keep knocking. */
+const RESTING_KEY = 'pm-models-resting';
+const resting = (() => { try { return JSON.parse(localStorage.getItem(RESTING_KEY)) || {}; } catch { return {}; } })();
+function rest(model, until) {
+  resting[model] = until;
+  try { localStorage.setItem(RESTING_KEY, JSON.stringify(resting)); } catch {}
+}
+// Free daily allowances reset at midnight Pacific time (07:00 or 08:00 UTC); wait for the later one.
+function nextDailyReset() {
+  const d = new Date(); d.setUTCHours(8, 0, 0, 0);
+  if (d <= new Date()) d.setUTCDate(d.getUTCDate() + 1);
+  return d.getTime();
+}
+function restFromError(model, msg) {
+  if (/PerDay/.test(msg)) return rest(model, nextDailyReset());
+  const secs = Number((/retry in ([\d.]+)s/i.exec(msg) || [])[1]) || 60;
+  rest(model, Date.now() + secs * 1000);
+}
+
+/** Thrown when every model has used up its free allowance. */
+export class FullForToday extends Error { constructor() { super('All models are out of free allowance'); this.code = 'full'; } }
+
+/**
+ * Run one request on the first model in the chain that still has allowance, moving down the chain
+ * when a model is out of allowance or unavailable, and retrying once on a passing hiccup.
+ */
+async function runOnModels(kind, params, call, signal) {
+  const now = Date.now();
+  let chain = CHAINS[kind].filter(m => !(resting[m] > now));
+  if (!chain.length) chain = [CHAINS[kind][0]];           // everything resting: try once anyway
+  let last = null, allQuota = true;
+  for (const name of chain) {
+    let p = params;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await call(geminiModel({ ...p, model: name }));
+      } catch (e) {
+        if (e?.name === 'AbortError' || signal?.aborted) throw e;
+        const msg = String(e?.message || '');
+        last = e;
+        if (/\[429/.test(msg)) { restFromError(name, msg); break; }             // out of allowance → next model
+        allQuota = false;
+        if (/\[404/.test(msg)) { rest(name, Date.now() + 864e5); break; }       // model retired → next model
+        if (/\[400/.test(msg) && /thinking/i.test(msg) && p.generationConfig?.thinkingConfig) {
+          const { thinkingConfig, ...gc } = p.generationConfig;                // model can't take the setting
+          p = { ...p, generationConfig: gc }; continue;
+        }
+        if (attempt === 0 && /fetch-error/.test(String(e?.code)) && !/\[(400|403)/.test(msg)) {
+          await new Promise(r => setTimeout(r, 1200 + Math.random() * 800)); continue;   // passing hiccup
+        }
+        throw e;
+      }
+    }
   }
+  throw allQuota ? new FullForToday() : last;
 }
 
 /** How many follow-up questions each kind of consultation may ask, at most. */
@@ -58,11 +110,10 @@ export const cleanReply = s => s.replace(/<<[\s\S]*$/, '').replace(/<$/, '').tri
  * @returns {Promise<{reply: string, ready: boolean}>}
  */
 export async function askFollowUp({ turns, n, mode, onText, signal }) {
-  const model = geminiModel({
+  const result = await runOnModels('intake', {
     systemInstruction: intakeInstruction(n, mode),
     generationConfig: { temperature: 0.8, maxOutputTokens: 2048, thinkingConfig: THINK.intake },
-  });
-  const result = await withRetry(() => model.generateContentStream({ contents: toContents(turns) }, { signal }), signal);
+  }, model => model.generateContentStream({ contents: toContents(turns) }, { signal }), signal);
   let text = '';
   for await (const chunk of result.stream) {
     text += chunk.text();
@@ -144,10 +195,9 @@ function normalise(r) {
 
 /** Write the prescription. Throws {code:'invalid_json'} if the reply can't be read. */
 export async function writePrescription({ turns, rxs, extra, signal }) {
-  const model = geminiModel({
+  const result = await runOnModels('rx', {
     generationConfig: { temperature: 0.7, responseMimeType: 'application/json', maxOutputTokens: 8192, thinkingConfig: THINK.rx },
-  });
-  const result = await withRetry(() => model.generateContent(prescriptionPrompt(turns, rxs, extra), { signal }), signal);
+  }, model => model.generateContent(prescriptionPrompt(turns, rxs, extra), { signal }), signal);
   const parsed = parseJson(result.response.text());
   if (!parsed) throw { code: 'invalid_json' };
   return normalise(parsed);
@@ -157,9 +207,10 @@ export async function writePrescription({ turns, rxs, extra, signal }) {
 export function errorCopy(e) {
   const code = String(e?.code || ''), msg = String(e?.message || '');
   if (code === 'invalid_json') return 'My pen slipped. Try once more.';
+  if (code === 'full') return "The consulting room is full for today. Dr. Stillwell will be back tomorrow morning.";
   if (code.includes('api-not-enabled')) return 'The AI service is not switched on for this Firebase project yet. Turn on AI Logic in the Firebase console.';
   if (/429|quota|exhausted/i.test(msg)) return 'The consulting room is busy right now. Give it a minute, then try again.';
   if (/blocked|safety|SAFETY/.test(msg)) return "I can't respond to that here. If you're in danger, call your local emergency number or Samaritans on 116 123.";
-  if (/model.*not found|404/i.test(msg)) return 'The AI model in the settings is not available. Check VITE_GEMINI_MODEL in .env.local.';
+  if (/model.*not found|404/i.test(msg)) return 'The doctor is unavailable right now. Try again in a little while.';
   return 'The line dropped for a moment. Try again when you are ready.';
 }

@@ -60,7 +60,7 @@ The database rules live in `firestore.rules`. Paste them into Firebase → Fires
 ## Before sharing it widely
 - Turn on **App Check** (Firebase console → App Check) so only your site can use your free AI quota.
 - The free Gemini tier may use requests to improve Google's products; the sign-in screen says so. Switching the project to a paid plan changes that.
-- To use a different Gemini model, set `VITE_GEMINI_MODEL` in `.env.local`.
+- Each Gemini model has its own small free daily allowance, so `src/doctor.js` (`CHAINS`) spreads requests across several and moves on when one runs out. Adding billing to the Firebase project removes the daily limits.
 
 ## Files
 - `src/doctor.js` – Dr. Stillwell's instructions: follow-up questions and the prescription

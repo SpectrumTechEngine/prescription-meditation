@@ -15,7 +15,6 @@ const config = {
 };
 
 export const configured = Boolean(config.apiKey && config.projectId && config.appId);
-export const MODEL = env.VITE_GEMINI_MODEL || 'gemini-3.6-flash';
 
 let auth, db, ai;
 if (configured) {
@@ -31,7 +30,7 @@ if (configured) {
 
 
 /* ---------- AI ---------- */
-export const geminiModel = params => getGenerativeModel(ai, { model: MODEL, ...params });
+export const geminiModel = params => getGenerativeModel(ai, params);
 
 /* ---------- Accounts ---------- */
 export function signIn() {

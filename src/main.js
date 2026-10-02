@@ -1,6 +1,6 @@
 import './style.css';
 import { configured, signIn, logOut, watchUser, watchPrescriptions, savePrescription, updatePrescription } from './firebase.js';
-import { MODES, askFollowUp, writePrescription, errorCopy } from './doctor.js';
+import { MODES, askFollowUp, aftercareReply, writePrescription, errorCopy } from './doctor.js';
 import { youtubeEnabled, findVideo, searchUrl, watchUrl, validId } from './youtube.js';
 import { ringBell, isSoundOn, setSoundOn, BELL_SVG, drawBells } from './bell.js';
 
@@ -14,7 +14,43 @@ const S = {
   user: null, rxs: [], unwatch: null,
   mode: 'standard', turns: [], moodWords: [], patientTurns: 0,
   busy: false, ctl: null, lastRx: null,
+  phase: 'intake',          // 'intake' → 'aftercare' (after a prescription) → 'closed' (free plan, done for today)
+  currentRx: null, crisisShown: false, loaded: null,
 };
+
+/* ---------- plan: free version for everyone, full version for the owner ---------- */
+const FULL_VERSION_EMAILS = ['stephencromwelldublin@gmail.com'];
+const isFull = () => FULL_VERSION_EMAILS.includes((S.user?.email || '').toLowerCase());
+const dublinDay = ms => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Dublin' }).format(new Date(ms));
+function todaysRxs() {
+  const all = S.lastRx && !S.rxs.some(r => r.id === S.lastRx.id) ? [S.lastRx, ...S.rxs] : S.rxs;
+  const today = dublinDay(Date.now());
+  return all.filter(r => r.at && dublinDay(r.at) === today);
+}
+const canConsult = () => isFull() || !todaysRxs().some(r => !r.swap);   // one prescription a day
+const canSwap = () => isFull() || !todaysRxs().some(r => r.swap);       // plus one swap if it wasn't right
+const CLOSED_LINE = "That's all from me for today on the free plan. I'll be here tomorrow morning for your next prescription, and your saved meditations are in Favourites any time.";
+
+/* ---------- crisis safety net: shown instantly, no AI needed ---------- */
+const CRISIS = /\b(suicid\w*|kill(ing)? my ?self|end(ing)? (my|it) (life|all)|take my (own )?life|self[- ]?harm\w*|hurt(ing)? my ?self|cut(ting)? my ?self|want(ed)? to die|wish i (was|were) dead|better off dead|no (reason|point) (to|in) (live|living|go on)|don'?t want to (live|be alive|be here|wake up)|overdos\w*)\b/i;
+function crisisCard() {
+  const card = el('aside', 'crisis');
+  card.setAttribute('role', 'note');
+  card.append(el('h3', '', "You don't have to carry this alone"));
+  card.append(el('p', '', "If you're thinking about ending your life or hurting yourself, please talk to someone now. These are free and open day and night:"));
+  const ul = el('ul');
+  [['Samaritans (Ireland and UK)', 'Call 116 123', 'tel:116123'],
+   ['Text About It (Ireland)', 'Text HELLO to 50808', 'sms:50808?body=HELLO'],
+   ['Shout (UK)', 'Text SHOUT to 85258', 'sms:85258?body=SHOUT'],
+   ['988 Lifeline (US)', 'Call or text 988', 'tel:988'],
+   ['In an emergency', 'Call 112 or 999 (Ireland, UK) or 911 (US)', 'tel:112'],
+  ].forEach(([who, how, href]) => {
+    const li = el('li'); li.append(el('strong', '', who + ': '));
+    const a = el('a', '', how); a.href = href; li.append(a); ul.append(li);
+  });
+  card.append(ul, el('p', 'crisis-foot', "I'm still here, and we'll keep going together."));
+  return card;
+}
 
 const BELL = BELL_SVG;
 drawBells();
@@ -63,16 +99,33 @@ else watchUser(user => {
   S.unwatch?.(); S.unwatch = null;
   S.user = user; S.rxs = [];
   if (!user) { show('gate'); return; }
+  let markLoaded; S.loaded = new Promise(r => { markLoaded = r; });
+  setTimeout(() => markLoaded(), 5000);
   show('app');
   const patient = $('#patient');
   const name = user.displayName || 'You';
   if (user.photoURL) { const img = el('img'); img.src = user.photoURL; img.alt = ''; img.referrerPolicy = 'no-referrer'; patient.replaceChildren(img, el('span', '', name)); }
   else patient.replaceChildren(el('span', '', name));
-  S.unwatch = watchPrescriptions(user.uid, rxs => { S.rxs = rxs; renderLists(); },
+  S.unwatch = watchPrescriptions(user.uid, rxs => { S.rxs = rxs; renderLists(); markLoaded(); },
     err => { console.error(err); sysNote("Your patient file couldn't be loaded. Check the Firestore rules are deployed.", true); });
+  renderPlan();
   renderLists();
   greet();
 });
+
+function renderPlan() {
+  const full = isFull();
+  const chip = $('#plan');
+  chip.textContent = full ? 'Full version' : 'Free plan';
+  chip.classList.toggle('full', full);
+  const deep = modeEl.querySelector('[data-mode="deep"]');
+  deep.classList.toggle('premium', !full);
+  deep.title = full ? '' : 'Part of the full version';
+  if (!full && S.mode === 'deep') {
+    S.mode = 'standard';
+    modeEl.querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', String(x.dataset.mode === 'standard')));
+  }
+}
 
 /* ---------- bell & sound ---------- */
 const soundBtn = $('#sound');
@@ -93,6 +146,7 @@ function showView(v) {
 const modeEl = $('#mode');
 modeEl.querySelectorAll('button').forEach(b => (b.onclick = () => {
   if (modeEl.classList.contains('locked')) return;
+  if (b.dataset.mode === 'deep' && !isFull()) { sysNote('Take your time is part of the full version. The standard consultation is here for you every day.'); return; }
   S.mode = b.dataset.mode;
   modeEl.querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', String(x === b)));
 }));
@@ -130,16 +184,51 @@ function setBusy(b) { S.busy = b; sendBtn.disabled = b; }
 async function greet() {
   S.ctl?.abort();
   S.turns = []; S.moodWords = []; S.patientTurns = 0; S.lastRx = null;
+  S.phase = 'intake'; S.currentRx = null; S.crisisShown = false;
   setBusy(false); lockMode(false);
   thread.replaceChildren(); setNext();
+  await S.loaded;
   const first = (S.user?.displayName || '').split(' ')[0];
-  const g = `${partOfDay()}${first ? ', ' + first : ''}. I'm Dr. Stillwell. What's going on with you?`;
-  const t = addMsg('doctor');
-  await typeInto(t, g);
-  const t2 = addMsg('doctor');
-  await typeInto(t2, "Tell me how you're feeling, anything you're worried about, and how much time you have. However it comes out is fine.");
-  S.turns.push({ role: 'assistant', content: g + ' ' + t2.textContent });
+  const hello = `${partOfDay()}${first ? ', ' + first : ''}.`;
+
+  if (!isFull()) {
+    const key = 'pm-free-notice-' + S.user.uid;
+    let seen = false; try { seen = localStorage.getItem(key) === '1'; } catch {}
+    if (!seen) {
+      const note = el('aside', 'plan-note');
+      note.append(el('strong', '', "You're on the free plan"),
+        el('span', '', "You get one meditation prescription a day. If it isn't right for you, tap \u201cNot for me\u201d and I'll find you another."));
+      thread.append(note);
+      try { localStorage.setItem(key, '1'); } catch {}
+    }
+  }
+
+  // Free plan: today's prescription is already written. Show it again and let them talk about it.
+  if (!canConsult()) {
+    const rx = todaysRxs()[0];
+    await doctorSays(`${hello} Welcome back. Here's today's prescription again, ready whenever you are.`);
+    thread.append(renderSlip(rx, { context: 'chat' })); scrollDown();
+    S.currentRx = rx; S.lastRx = rx;
+    S.turns.push({ role: 'assistant', content: `[Prescribed earlier today ${rx.no}: "${rx.title}", ${rx.technique} with ${rx.teacher}, ${rx.minutes} minutes]` });
+    if (!rx.aftercare) {
+      S.phase = 'aftercare';
+      await doctorSays('If you have taken it, tell me how it went.');
+    } else {
+      S.phase = 'closed';
+      await doctorSays("I'll be here tomorrow morning for your next one.");
+    }
+    return;
+  }
+
+  const g = `${hello} I'm Dr. Stillwell. What's going on with you?`;
+  await doctorSays(g);
+  const second = "Tell me how you're feeling, anything you're worried about, and how much time you have. However it comes out is fine.";
+  await doctorSays(second);
+  S.turns.push({ role: 'assistant', content: g + ' ' + second });
 }
+
+/** A doctor line written by the app itself (no AI request). */
+async function doctorSays(text) { const t = addMsg('doctor'); await typeInto(t, text); }
 
 async function send(text) {
   text = text.trim();
@@ -147,6 +236,10 @@ async function send(text) {
   stopListening();
   msg.value = ''; autosize();
   const mine = addMsg('patient', text);
+  if (CRISIS.test(text) && !S.crisisShown) { S.crisisShown = true; thread.append(crisisCard()); scrollDown(); }
+  if (S.phase === 'closed') { await doctorSays(CLOSED_LINE); return; }
+  if (S.phase === 'aftercare') { await aftercare(text, mine); return; }
+  if (!canConsult()) { S.phase = 'closed'; await doctorSays(CLOSED_LINE); return; }
   S.turns.push({ role: 'user', content: text });
   S.moodWords.push(text);
   S.patientTurns++;
@@ -184,6 +277,40 @@ async function send(text) {
   if (out.ready) { await wait(500); await prescribe(); }
 }
 
+async function aftercare(text, mine) {
+  const rx = S.currentRx;
+  if (!isFull() && (rx?.aftercare || 0) >= 1) {
+    S.phase = 'closed';
+    await doctorSays("Let's leave it there for today. On the free plan we pick this up again tomorrow, and I'll remember what you told me.");
+    return;
+  }
+  S.turns.push({ role: 'user', content: text });
+  const t = addMsg('doctor'); typingDots(t);
+  setBusy(true);
+  S.ctl = new AbortController();
+  let reply;
+  try {
+    reply = await aftercareReply({ turns: S.turns, rx, signal: S.ctl.signal, onText: shown => { t.textContent = shown; scrollDown(); } });
+  } catch (e) {
+    setBusy(false);
+    S.turns.pop();
+    t.closest('.msg').remove(); mine.closest('.msg').remove();
+    if (!msg.value.trim()) { msg.value = text; autosize(); }
+    if (e?.name === 'AbortError') return;
+    console.error(e);
+    sysNote(errorCopy(e), true);
+    return;
+  }
+  setBusy(false);
+  reply = reply || "Thank you for telling me. I'll keep that in mind for next time.";
+  t.textContent = reply;
+  S.turns.push({ role: 'assistant', content: reply });
+  if (rx) {
+    const note = [rx.afterNote, text].filter(Boolean).join(' / ').slice(0, 600);
+    patch(rx.id, { aftercare: (rx.aftercare || 0) + 1, afterNote: note });
+  }
+}
+
 async function handOver() {
   const t = addMsg('doctor');
   await typeInto(t, 'Thank you. I have what I need. Let me write something for you.');
@@ -195,8 +322,9 @@ function nextNo() {
   return 'RX-' + String(max + 1).padStart(4, '0');
 }
 
-async function prescribe(extra) {
+async function prescribe(extra, { swap = false } = {}) {
   if (S.busy) return;
+  if (!(swap ? canSwap() : canConsult())) { S.phase = 'closed'; await doctorSays(CLOSED_LINE); return; }
   setBusy(true); setNext();
   const card = el('div', 'writing');
   card.innerHTML = '<svg viewBox="0 0 64 24" aria-hidden="true"><path d="M2 16c6-10 9 6 14-2s7-6 10 0 6 4 10-3 7 1 10 3 8-2 16-4"/></svg>';
@@ -211,7 +339,7 @@ async function prescribe(extra) {
   } catch (e) {
     card.remove(); setBusy(false);
     if (e?.name !== 'AbortError') { console.error(e); sysNote(errorCopy(e), true); }
-    setNext(button('Write my prescription', '', () => prescribe(extra), ICON.bell));
+    setNext(button('Write my prescription', '', () => prescribe(extra, { swap }), ICON.bell));
     return;
   }
 
@@ -237,6 +365,7 @@ async function prescribe(extra) {
   rx.mood = S.moodWords.join(' / ').slice(0, 800);
   rx.mode = S.mode;
   rx.fav = false; rx.disliked = false; rx.dislikeReason = '';
+  rx.swap = swap; rx.aftercare = 0; rx.afterNote = '';
 
   card.remove();
   const slip = renderSlip(rx, { context: 'chat' });
@@ -250,7 +379,8 @@ async function prescribe(extra) {
   if (rx.closing) { await wait(900); const t = addMsg('doctor'); await typeInto(t, rx.closing); }
   S.turns.push({ role: 'assistant', content: `[Prescribed ${rx.no}: "${rx.title}", ${rx.technique} with ${rx.teacher}, ${rx.minutes} minutes]` });
   S.patientTurns = 0; S.moodWords = [];
-  setNext(button('Start a new consultation', '', () => greet()));
+  S.phase = 'aftercare'; S.currentRx = rx;
+  if (isFull()) setNext(button('Start a new consultation', '', () => greet()));
 }
 
 /* ---------- favourites & dislikes ---------- */
@@ -354,9 +484,14 @@ function renderSlip(rx, { context }) {
       await patch(rx.id, { disliked: true, dislikeReason: reason, fav: false });
       if (context === 'chat' && !S.busy) {
         showView('consult');
-        setNext(button('Prescribe something else', '', () => prescribe(
-          `The patient just turned down "${rx.title}" (${rx.technique} with ${rx.teacher}) because: ${reason}. Prescribe something clearly different that still fits them, and set repeatOf to null.`), ICON.bell));
-        scrollDown();
+        if (canSwap()) {
+          setNext(button('Prescribe something else', '', () => prescribe(
+            `The patient just turned down "${rx.title}" (${rx.technique} with ${rx.teacher}) because: ${reason}. Prescribe something clearly different that still fits them, and set repeatOf to null.`,
+            { swap: true }), ICON.bell));
+          scrollDown();
+        } else {
+          doctorSays("I'm sorry that one wasn't right either. I've noted it, and tomorrow I'll find you something different.");
+        }
       }
     };
     reasons.append(c);

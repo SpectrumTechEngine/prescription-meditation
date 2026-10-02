@@ -77,7 +77,8 @@ export const MODES = {
 
 const PERSONA = `You are Dr. Stillwell, the attending meditation physician at Prescription Meditation. You hold a (playful) licence to prescribe guided meditations, and you are in a live one-on-one consultation with a patient.`;
 
-const SAFETY = `If the patient mentions wanting to harm themselves or someone else, or being in danger: respond with care and tell them to contact local emergency services or a crisis line now (Samaritans 116 123 in the UK and Ireland, 988 in the US). Then gently ask how they are right now, and end with <<ASK>>.`;
+const SAFETY_CORE = `If the patient mentions wanting to harm themselves or someone else, or being in danger: respond with care and tell them to contact local emergency services or a crisis line now (Samaritans 116 123 in the UK and Ireland, 988 in the US).`;
+const SAFETY = SAFETY_CORE + ` Then gently ask how they are right now, and end with <<ASK>>.`;
 
 function intakeInstruction(n, mode) {
   const plan = mode === 'deep'
@@ -123,6 +124,33 @@ export async function askFollowUp({ turns, n, mode, onText, signal }) {
   return { reply: cleanReply(text), ready: /<<READY>>/.test(text) };
 }
 
+/**
+ * A reply after the meditation, when the patient comes back to talk about it. Streamed.
+ * @returns {Promise<string>}
+ */
+export async function aftercareReply({ turns, rx, onText, signal }) {
+  const system = `${PERSONA}
+
+You prescribed "${rx.title}" (${rx.technique} with ${rx.teacher || 'a guided teacher'}, ${rx.minutes} minutes), and the patient has come back to talk about it.
+
+How to reply:
+- 1 to 3 short sentences. Warm, calm, plain words. Respond to what they actually said; if they ask something about the practice, answer it simply.
+- Do not prescribe another meditation and do not start a new consultation. Only ask a question if you truly need to.
+- No lists, no emoji, no exclamation marks.
+- ${SAFETY_CORE}`;
+  const result = await runOnModels('intake', {
+    systemInstruction: system,
+    generationConfig: { temperature: 0.8, maxOutputTokens: 2048, thinkingConfig: THINK.intake },
+  }, model => model.generateContentStream({ contents: toContents(turns) }, { signal }), signal);
+  let text = '';
+  for await (const chunk of result.stream) {
+    text += chunk.text();
+    const shown = cleanReply(text);
+    if (shown) onText(shown);
+  }
+  return cleanReply(text);
+}
+
 const fmtDate = ms => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(ms));
 
 function patientFile(rxs) {
@@ -131,6 +159,7 @@ function patientFile(rxs) {
     title: r.title, technique: r.technique, teacher: r.teacher, minutes: r.minutes, query: r.query,
     ...(r.videoTitle ? { video: r.videoTitle } : {}),
     favourite: !!r.fav, disliked: !!r.disliked, ...(r.dislikeReason ? { dislikeReason: r.dislikeReason } : {}),
+    ...(r.afterNote ? { patientSaidAfterwards: r.afterNote } : {}),
   }));
 }
 

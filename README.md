@@ -62,6 +62,25 @@ The database rules live in `firestore.rules`. Paste them into Firebase → Fires
 - The free Gemini tier may use requests to improve Google's products; the sign-in screen says so. Switching the project to a paid plan changes that.
 - Each Gemini model has its own small free daily allowance, so `src/doctor.js` (`CHAINS`) spreads requests across several and moves on when one runs out. Adding billing to the Firebase project removes the daily limits.
 
+## Growing the app (checklist for when there are more users)
+
+Free limits today, for the whole app per day:
+
+| Limit | Capacity | How to raise it |
+|---|---|---|
+| Gemini AI, free tier (~20 requests per model, 4 models rotate) | ~20 consultations | Upgrade the Firebase project to **Blaze** (can share the What's 4 the Gaff billing account). Paid tier, no daily cap, ~€0.005–0.01 per consultation. |
+| YouTube Data API (10,000 units; ~101 per prescription) | ~99 prescriptions | **Not** affected by Blaze. Apply (free) via the YouTube API quota extension form well before it's needed. When it runs out, slips show a "Find it on YouTube" link instead. |
+| Fraud Defense / App Check | 10,000 checks a month (~100 regular users) | Small charge beyond that. |
+
+Rough budget guide: €15 a month ≈ 1,500–3,000 consultations ≈ 15–35 people using it 3 times every day, or 60–100 typical users.
+
+Before a big launch:
+1. Upgrade to Blaze and set a **budget alert** (an alert, not a hard stop).
+2. Update the sign-in privacy note: on the paid tier Google doesn't use conversations to improve its products.
+3. Move the free-plan limits (one prescription a day, one swap, one reply afterwards) into Firestore security rules so they can't be bypassed. They're enforced in the app today.
+4. Request more YouTube quota.
+5. Optionally simplify `CHAINS` in `src/doctor.js` to always use the best model.
+
 ## Files
 - `src/doctor.js` – Dr. Stillwell's instructions: follow-up questions and the prescription
 - `src/youtube.js` – picks the best real video (length, teacher, never one you disliked)

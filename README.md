@@ -55,7 +55,7 @@ because `.env.local` itself is never committed. If you change a key, update the 
 Google sign-in only works on addresses listed in Firebase → Authentication → Settings → **Authorised domains**
 (`localhost` and `thespectrumtechengine.com`).
 
-The database rules live in `firestore.rules`. Paste them into Firebase → Firestore → Rules if you change them.
+The database (Firestore, europe-west1) rules live in `firestore.rules`. After changing them, publish with `npx firebase-tools deploy --only firestore:rules`.
 
 ## Before sharing it widely
 - Turn on **App Check** (Firebase console → App Check) so only your site can use your free AI quota.

@@ -27,8 +27,22 @@ function todaysRxs() {
   const today = dublinDay(Date.now());
   return all.filter(r => r.at && dublinDay(r.at) === today);
 }
-const canConsult = () => isFull() || !todaysRxs().some(r => !r.swap);   // one prescription a day
-const canSwap = () => isFull() || !todaysRxs().some(r => r.swap);       // plus one swap if it wasn't right
+// Backup count kept on the device too, so the daily limit holds even if the patient file can't be reached.
+const usageKey = () => 'pm-usage-' + (S.user?.uid || '');
+function localUsage() {
+  try {
+    const u = JSON.parse(localStorage.getItem(usageKey()));
+    if (u && u.day === dublinDay(Date.now())) return u;
+  } catch {}
+  return { day: dublinDay(Date.now()), main: 0, swap: 0 };
+}
+function countLocally(swap) {
+  const u = localUsage();
+  u[swap ? 'swap' : 'main']++;
+  try { localStorage.setItem(usageKey(), JSON.stringify(u)); } catch {}
+}
+const canConsult = () => isFull() || (!todaysRxs().some(r => !r.swap) && localUsage().main < 1);   // one prescription a day
+const canSwap = () => isFull() || (!todaysRxs().some(r => r.swap) && localUsage().swap < 1);       // plus one swap if it wasn't right
 const CLOSED_LINE = "That's all from me for today on the free plan. I'll be here tomorrow morning for your next prescription, and your saved meditations are in Favourites any time.";
 
 /* ---------- crisis safety net: shown instantly, no AI needed ---------- */
@@ -204,6 +218,11 @@ async function greet() {
   }
 
   // Free plan: today's prescription is already written. Show it again and let them talk about it.
+  if (!canConsult() && !todaysRxs().length) {
+    S.phase = 'closed';
+    await doctorSays(`${hello} Welcome back. You've had today's prescription already. I'll be here tomorrow morning for your next one.`);
+    return;
+  }
   if (!canConsult()) {
     const rx = todaysRxs()[0];
     await doctorSays(`${hello} Welcome back. Here's today's prescription again, ready whenever you are.`);
@@ -374,6 +393,7 @@ async function prescribe(extra, { swap = false } = {}) {
   ringBell();
   setBusy(false);
   S.lastRx = rx;
+  countLocally(swap);
   savePrescription(S.user.uid, rx).catch(e => { console.error(e); sysNote("This prescription couldn't be filed. It's still here on screen.", true); });
 
   if (rx.closing) { await wait(900); const t = addMsg('doctor'); await typeInto(t, rx.closing); }

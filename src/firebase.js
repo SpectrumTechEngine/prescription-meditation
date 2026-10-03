@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, updateDoc, onSnapshot, query, orderBy, limit, increment } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, deleteUser, reauthenticateWithPopup } from 'firebase/auth';
+import { getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, limit, increment, writeBatch } from 'firebase/firestore';
 import { getAI, getGenerativeModel, GoogleAIBackend } from 'firebase/ai';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 
@@ -89,3 +89,49 @@ const statsDoc = () => doc(db, 'stats', pacificDay());
 export const recordUsage = model => setDoc(statsDoc(), { total: increment(1), used: { [statKey(model)]: increment(1) } }, { merge: true });
 export const recordOut = (model, until) => setDoc(statsDoc(), { out: { [statKey(model)]: until } }, { merge: true });
 export const watchStats = (cb, onError) => onSnapshot(statsDoc(), snap => cb(snap.exists() ? snap.data() : {}), onError);
+export const recordYoutubeSearch = () => setDoc(statsDoc(), { yt: increment(1) }, { merge: true });
+
+/* ---------- App stats: metrics/{Irish day} and metrics/totals — anonymous counts only ----------
+   Every app adds to them; only the owner can read them. Nothing anyone says is ever stored here. */
+export const dublinDay = (ms = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Dublin' }).format(new Date(ms));
+const metricKey = s => String(s || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'unknown';
+/** Add to today's counts, e.g. bumpMetrics({ rx: 1, techniques: ['Body scan'] }). Arrays count each named entry once. */
+export function bumpMetrics(counts, docId = dublinDay()) {
+  const data = {};
+  for (const [k, v] of Object.entries(counts)) {
+    if (Array.isArray(v)) data[k] = Object.fromEntries(v.filter(Boolean).map(name => [metricKey(name), increment(1)]));
+    else data[k] = increment(v);
+  }
+  return setDoc(doc(db, 'metrics', docId), data, { merge: true });
+}
+export async function fetchMetrics(days) {
+  const snaps = await Promise.all(days.map(d => getDoc(doc(db, 'metrics', d))));
+  return snaps.map(s => (s.exists() ? s.data() : {}));
+}
+export async function fetchTotals() {
+  const s = await getDoc(doc(db, 'metrics', 'totals'));
+  return s.exists() ? s.data() : {};
+}
+
+/* ---------- "Delete my data": everything this person has saved, then their sign-in ---------- */
+export async function deleteMyData() {
+  const user = auth.currentUser;
+  if (!user) return;
+  const uid = user.uid;
+  // Their prescriptions, in batches
+  const snap = await getDocs(rxCol(uid));
+  let batch = writeBatch(db), n = 0;
+  for (const d of snap.docs) {
+    batch.delete(d.ref);
+    if (++n === 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+  }
+  if (n) await batch.commit();
+  await deleteDoc(stateDoc(uid));
+  // Their account; Google asks them to confirm it's them if they signed in a while ago
+  try { await deleteUser(user); }
+  catch (e) {
+    if (e?.code !== 'auth/requires-recent-login') throw e;
+    await reauthenticateWithPopup(user, new GoogleAuthProvider());
+    await deleteUser(user);
+  }
+}

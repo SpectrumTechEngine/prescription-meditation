@@ -40,7 +40,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
       Get the Android app
     </a>
-    <p class="fine">What you tell the doctor is sent to Google's Gemini AI to write your prescription. Your prescriptions are saved privately to your account.</p>
+    <p class="fine">What you tell the doctor is sent to Google's Gemini AI to write your prescription. Your prescriptions are saved privately to your account, and you can delete them any time. We keep anonymous counts, like how many meditations are prescribed, to improve the app, never what you tell the doctor.</p>
     <img class="ste-sig" src="/ste-logo.png" alt="Created by The Spectrum Tech Engine" width="871" height="112">
   </section>
 
@@ -124,6 +124,19 @@
       <section id="view-file" role="tabpanel" aria-labelledby="tab-file" hidden>
         <div class="list-head"><h2>Patient file</h2><p>Every prescription Dr. Stillwell has written for you, newest first.</p></div>
         <div class="list" id="file-list"></div>
+        <section class="delete-data">
+          <h3>Your data</h3>
+          <p>You can delete everything you've saved here at any time: your prescriptions, favourites, notes and your sign-in. This can't be undone.</p>
+          <button class="btn" type="button" id="delete-data">Delete my data</button>
+          <div class="delete-confirm" id="delete-confirm" hidden>
+            <p><strong>Delete all your data?</strong> Your patient file, favourites and account will be erased for good. Google may ask you to confirm it's you.</p>
+            <div class="actions">
+              <button class="btn danger" type="button" id="delete-yes">Yes, delete everything</button>
+              <button class="btn" type="button" id="delete-no">Cancel</button>
+            </div>
+          </div>
+          <p class="admin-note" id="delete-status" aria-live="polite"></p>
+        </section>
       </section>
     </main>
 
@@ -181,6 +194,16 @@
         <tbody id="adm-models"></tbody>
       </table>
       <p class="admin-note">Free allowances reset at midnight Pacific time, around 8am in Ireland. Google doesn't say how much is left, only when a model runs out. Exact figures: <a href="https://ai.dev/rate-limit" target="_blank" rel="noopener">ai.dev/rate-limit</a></p>
+    </section>
+
+    <section class="admin-sec">
+      <h3>App stats</h3>
+      <div class="mode" role="radiogroup" aria-label="Period" id="stats-range">
+        <button type="button" role="radio" data-days="1">Today</button>
+        <button type="button" role="radio" data-days="7">7 days</button>
+        <button type="button" role="radio" data-days="30">30 days</button>
+      </div>
+      <div class="stats" id="stats-body"></div>
     </section>
 
     <section class="admin-sec">

@@ -3,6 +3,7 @@ import {
   configured, signIn, logOut, watchUser, watchPrescriptions, savePrescription, updatePrescription,
   OWNER_UID, getUserState, setUserState, fetchMemos, watchMemos, sendMemo, withdrawMemo,
   recordUsage, recordOut, watchStats, statKey,
+  recordYoutubeSearch, bumpMetrics, fetchMetrics, fetchTotals, dublinDay as irishDay, deleteMyData,
 } from './firebase.js';
 import {
   MODES, askFollowUp, aftercareReply, writePrescription, errorCopy,
@@ -57,6 +58,42 @@ function countLocally(swap) {
 const canConsult = () => isFull() || (!todaysRxs().some(r => !r.swap) && localUsage().main < 1);   // one prescription a day
 const canSwap = () => isFull() || (!todaysRxs().some(r => r.swap) && localUsage().swap < 1);       // plus one swap if it wasn't right
 const CLOSED_LINE = "That's all from me for today on the free plan. I'll be here tomorrow morning for your next prescription, and your saved meditations are in Favourites any time.";
+
+/* ---------- anonymous app stats (counts only; the owner's own use isn't counted) ---------- */
+// Accounts created before stats existed are already in the backfilled total, so only later ones count as new.
+const STATS_START = Date.parse('2026-10-03T15:47:55Z');
+function count(counts) {
+  if (!S.user || isOwner()) return;
+  bumpMetrics(counts).catch(() => {});
+}
+const isoWeek = (ms = Date.now()) => {
+  const d = new Date(irishDay(ms) + 'T12:00:00Z');
+  const day = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - day + 3);
+  const jan4 = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  return d.getUTCFullYear() + '-W' + String(1 + Math.round(((d - jan4) / 864e5 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7)).padStart(2, '0');
+};
+// Once per person per day/week: active today, active this week, and new accounts.
+async function countVisit() {
+  if (!S.user || isOwner()) return;
+  try {
+    const st = await getUserState(S.user.uid);
+    const today = irishDay(), week = isoWeek();
+    const counts = {}, patch = {};
+    if (st.lastActiveDay !== today) { counts.active = 1; patch.lastActiveDay = today; }
+    if (st.lastActiveWeek !== week) { counts.activeWeek = 1; patch.lastActiveWeek = week; }
+    if (!st.counted) {
+      patch.counted = true;
+      const created = Date.parse(S.user.metadata?.creationTime || '') || 0;
+      if (created >= STATS_START) {
+        counts.newUsers = 1;
+        bumpMetrics({ users: 1 }, 'totals').catch(() => {});
+      }
+    }
+    if (Object.keys(patch).length) await setUserState(S.user.uid, patch);
+    if (Object.keys(counts).length) await bumpMetrics(counts);
+  } catch (e) { console.warn('visit count', e); }
+}
 
 /* ---------- crisis safety net: shown instantly, no AI needed ---------- */
 const CRISIS = /\b(suicid\w*|kill(ing)? my ?self|end(ing)? (my|it) (life|all)|take my (own )?life|self[- ]?harm\w*|hurt(ing)? my ?self|cut(ting)? my ?self|want(ed)? to die|wish i (was|were) dead|better off dead|no (reason|point) (to|in) (live|living|go on)|don'?t want to (live|be alive|be here|wake up)|overdos\w*)\b/i;
@@ -151,6 +188,7 @@ else watchUser(user => {
   renderLists();
   greet();
   S.loaded.then(checkMemo);
+  countVisit();
 });
 
 function renderPlan() {
@@ -250,11 +288,13 @@ async function greet() {
   // Free plan: today's prescription is already written. Show it again and let them talk about it.
   if (!canConsult() && !todaysRxs().length) {
     S.phase = 'closed';
+    count({ limitHit: 1 });
     await doctorSays(`${hello} Welcome back. You've had today's prescription already. I'll be here tomorrow morning for your next one.`);
     return;
   }
   if (!canConsult()) {
     const rx = todaysRxs()[0];
+    count({ limitHit: 1 });
     await doctorSays(`${hello} Welcome back. Here's today's prescription again, ready whenever you are.`);
     thread.append(renderSlip(rx, { context: 'chat' })); scrollDown();
     S.currentRx = rx; S.lastRx = rx;
@@ -285,13 +325,14 @@ async function send(text) {
   stopListening();
   msg.value = ''; autosize();
   const mine = addMsg('patient', text);
-  if (CRISIS.test(text) && !S.crisisShown) { S.crisisShown = true; thread.append(crisisCard()); scrollDown(); }
+  if (CRISIS.test(text) && !S.crisisShown) { S.crisisShown = true; thread.append(crisisCard()); scrollDown(); count({ crisis: 1 }); }
   if (S.phase === 'closed') { await doctorSays(CLOSED_LINE); return; }
   if (S.phase === 'aftercare') { await aftercare(text, mine); return; }
   if (!canConsult()) { S.phase = 'closed'; await doctorSays(CLOSED_LINE); return; }
   S.turns.push({ role: 'user', content: text });
   S.moodWords.push(text);
   S.patientTurns++;
+  if (S.patientTurns === 1) count({ consults: 1 });
   lockMode(true);
   setNext();
 
@@ -316,6 +357,7 @@ async function send(text) {
     if (S.patientTurns === 0) lockMode(false);
     if (e?.name === 'AbortError') return;
     console.error(e);
+    if (e?.code === 'full') count({ aiFull: 1 });
     sysNote(errorCopy(e), true);
     return;
   }
@@ -348,6 +390,7 @@ async function aftercare(text, mine) {
     if (!msg.value.trim()) { msg.value = text; autosize(); }
     if (e?.name === 'AbortError') return;
     console.error(e);
+    if (e?.code === 'full') count({ aiFull: 1 });
     sysNote(errorCopy(e), true);
     return;
   }
@@ -359,6 +402,7 @@ async function aftercare(text, mine) {
   if (rx) {
     const note = [rx.afterNote, text].filter(Boolean).join(' / ').slice(0, 600);
     patch(rx.id, { aftercare: (rx.aftercare || 0) + 1, afterNote: note });
+    count({ aftercare: 1 });
   }
 }
 
@@ -389,7 +433,7 @@ async function prescribe(extra, { swap = false } = {}) {
     rx = await writePrescription({ turns: S.turns, rxs: S.rxs, extra, signal: S.ctl.signal });
   } catch (e) {
     card.remove(); setBusy(false);
-    if (e?.name !== 'AbortError') { console.error(e); sysNote(errorCopy(e), true); }
+    if (e?.name !== 'AbortError') { console.error(e); if (e?.code === 'full') count({ aiFull: 1 }); sysNote(errorCopy(e), true); }
     setNext(button('Write my prescription', '', () => prescribe(extra, { swap }), ICON.bell));
     return;
   }
@@ -406,6 +450,7 @@ async function prescribe(extra, { swap = false } = {}) {
   } else if (youtubeEnabled) {
     words.textContent = 'Finding the right recording…';
     const exclude = new Set(S.rxs.map(r => r.videoId).filter(Boolean));
+    if (S.user) recordYoutubeSearch().catch(() => {});
     try { const v = await findVideo(rx, exclude); if (v) Object.assign(rx, v); }
     catch (e) { console.warn(e); }
   }
@@ -428,6 +473,11 @@ async function prescribe(extra, { swap = false } = {}) {
   setBusy(false);
   S.lastRx = rx;
   countLocally(swap);
+  count({
+    [swap ? 'swaps' : 'rx']: 1, ...(swap ? {} : { [isFull() ? 'rxFull' : 'rxFree']: 1 }),
+    [validId(rx.videoId) ? 'videoInApp' : 'videoLink']: 1,
+    techniques: [rx.technique], teachers: [rx.teacher],
+  });
   savePrescription(S.user.uid, rx).catch(e => { console.error(e); sysNote("This prescription couldn't be filed. It's still here on screen.", true); });
 
   if (rx.closing) { await wait(900); const t = addMsg('doctor'); await typeInto(t, rx.closing); }
@@ -519,6 +569,7 @@ function renderSlip(rx, { context }) {
   const fav = button('Save', 'fav', () => {
     const on = !find(rx.id)?.fav;
     patch(rx.id, on ? { fav: true, disliked: false, dislikeReason: '' } : { fav: false });
+    if (on) count({ favs: 1 });
   }, ICON.heart);
   fav.dataset.role = 'fav';
   const nope = button('Not for me', 'nope', () => {
@@ -536,6 +587,7 @@ function renderSlip(rx, { context }) {
     c.onclick = async () => {
       reasons.hidden = true;
       await patch(rx.id, { disliked: true, dislikeReason: reason, fav: false });
+      count({ dislikes: 1, reasons: [reason] });
       if (context === 'chat' && !S.busy) {
         showView('consult');
         if (canSwap()) {
@@ -609,7 +661,7 @@ const fmtWhen = ms => new Date(ms).toLocaleString('en-GB', { weekday: 'short', h
 
 $('#plan').onclick = () => {
   if (!isOwner()) return;
-  renderViewAs(); renderAllowance(); renderMemoList();
+  renderViewAs(); renderAllowance(); renderMemoList(); renderStats();
   $('#adm-test-note').textContent = ''; $('#memo-status').textContent = '';
   admin.showModal();
 };
@@ -649,7 +701,7 @@ function renderAllowance() {
   const total = st?.total || 0;
   $('#adm-total').textContent = st === null ? "Today's figures couldn't be loaded."
     : st === undefined ? 'Loading…'
-    : `${total} AI request${total === 1 ? '' : 's'} today across all users (about ${Math.round(total / 4)} consultation${Math.round(total / 4) === 1 ? '' : 's'}).`;
+    : `${total} AI request${total === 1 ? '' : 's'} today across all users (about ${Math.round(total / 4)} consultation${Math.round(total / 4) === 1 ? '' : 's'}). YouTube searches: ${st?.yt || 0} of about 99.`;
   const here = restingOnThisDevice();
   const now = Date.now();
   $('#adm-models').replaceChildren(...ALL_MODELS.map(m => {
@@ -660,6 +712,102 @@ function renderAllowance() {
     tr.append(el('td', 'mono', m), el('td', 'num', String(st?.used?.[k] || 0)), status);
     return tr;
   }));
+}
+
+/* ---------- admin: app stats (counts only) ---------- */
+let statsRange = 1;
+const REASON_LABELS = { didn_t_like_the_voice: "Didn't like the voice", wrong_length: 'Wrong length', wrong_kind_of_practice: 'Wrong kind of practice', didn_t_help: "Didn't help" };
+const pretty = k => REASON_LABELS[k] || k.replace(/_/g, ' ').replace(/\b\w/, c => c.toUpperCase());
+document.querySelectorAll('#stats-range button').forEach(b => (b.onclick = () => { statsRange = Number(b.dataset.days); renderStats(); }));
+async function renderStats() {
+  document.querySelectorAll('#stats-range button').forEach(b => b.setAttribute('aria-checked', String(Number(b.dataset.days) === statsRange)));
+  const box = $('#stats-body');
+  box.replaceChildren(el('p', 'admin-note', 'Loading…'));
+  try {
+    const days = [...Array(statsRange)].map((_, i) => irishDay(Date.now() - i * 864e5));
+    const [rows, totals] = await Promise.all([fetchMetrics(days), fetchTotals()]);
+    const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
+    const merge = k => { const m = {}; rows.forEach(r => Object.entries(r[k] || {}).forEach(([n, v]) => { m[n] = (m[n] || 0) + v; })); return m; };
+    const pct = (a, b) => (b ? Math.round((a / b) * 100) + '%' : '–');
+    const tile = (n, label) => { const d = el('div', 'stat-tile'); d.append(el('b', '', String(n)), el('span', '', label)); return d; };
+    const group = (title, tiles) => { const g = el('div', 'stat-group'); g.append(el('h4', '', title)); const t = el('div', 'stat-tiles'); t.append(...tiles); g.append(t); return g; };
+    const top = (title, map, n = 5) => {
+      const g = el('div', 'stat-group'); g.append(el('h4', '', title));
+      const entries = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, n);
+      if (!entries.length) { g.append(el('p', 'admin-note', 'Nothing yet.')); return g; }
+      const max = entries[0][1];
+      const ul = el('ul', 'stat-bars');
+      entries.forEach(([k, v]) => {
+        const li = el('li'); li.append(el('span', 'stat-bar-label', pretty(k)), el('span', 'stat-bar-num', String(v)));
+        const bar = el('span', 'stat-bar'); bar.style.width = Math.max(4, Math.round((v / max) * 100)) + '%'; li.append(bar);
+        ul.append(li);
+      });
+      g.append(ul); return g;
+    };
+    const period = statsRange === 1 ? 'today' : `last ${statsRange} days`;
+    const rx = sum('rx'), consults = sum('consults');
+    box.replaceChildren(
+      group('People', [
+        tile(totals.users || 0, 'users in total'),
+        tile(sum('newUsers'), `new, ${period}`),
+        tile(statsRange === 1 ? sum('active') : sum('activeWeek'), statsRange === 1 ? 'active today' : `active, ${period}`),
+        tile(sum('limitHit'), 'came back after their free meditation'),
+      ]),
+      group('Consultations', [
+        tile(consults, 'started'),
+        tile(rx, 'prescriptions written'),
+        tile(pct(rx, consults), 'finished with a prescription'),
+        tile(sum('swaps'), 'swaps'),
+        tile(sum('aftercare'), 'told the doctor how it went'),
+        tile(`${sum('rxFree')} / ${sum('rxFull')}`, 'free / full version'),
+      ]),
+      group('How well it is working', [
+        tile(sum('favs'), 'saved to Favourites'),
+        tile(sum('dislikes'), '"Not for me"'),
+        tile(pct(sum('favs'), rx + sum('swaps')), 'of prescriptions saved'),
+      ]),
+      top('Why people said "Not for me"', merge('reasons'), 4),
+      top('Most prescribed techniques', merge('techniques')),
+      top('Most prescribed teachers', merge('teachers')),
+      group('Video and AI', [
+        tile(sum('videoInApp'), 'played in the app'),
+        tile(sum('videoLink'), 'fell back to a YouTube link'),
+        tile(sum('aiFull'), '"consulting room full" shown'),
+      ]),
+      group('Safety', [tile(sum('crisis'), 'times the crisis card was shown')]),
+      el('p', 'admin-note', `Counts only, never names or what anyone said. Your own use isn't counted. Counting started on 3 Oct 2026.${sum('deleted') ? ` ${sum('deleted')} people deleted their data in this period.` : ''}`),
+    );
+  } catch (e) {
+    console.error(e);
+    box.replaceChildren(el('p', 'admin-note', "The stats couldn't be loaded. Try again in a moment."));
+  }
+}
+
+/* ---------- "Delete my data" (any user) ---------- */
+$('#delete-data').onclick = () => { $('#delete-confirm').hidden = false; $('#delete-data').hidden = true; };
+$('#delete-no').onclick = () => { $('#delete-confirm').hidden = true; $('#delete-data').hidden = false; };
+$('#delete-yes').onclick = async () => {
+  const yes = $('#delete-yes'); yes.disabled = true;
+  $('#delete-status').textContent = 'Deleting…';
+  try {
+    if (!isOwner()) await bumpMetrics({ deleted: 1 }).catch(() => {});
+    S.unwatch?.(); S.unwatch = null;
+    const uid = S.user.uid;
+    await deleteMyData();
+    try { Object.keys(localStorage).filter(k => k.includes(uid)).forEach(k => localStorage.removeItem(k)); } catch {}
+    $('#delete-status').textContent = '';
+    alertDeleted();
+  } catch (e) {
+    console.error(e);
+    $('#delete-status').textContent = e?.code === 'auth/popup-closed-by-user'
+      ? 'Deletion needs you to confirm with Google. Tap delete again when you are ready.'
+      : "Something went wrong and not everything was deleted. Please try again.";
+  } finally { yes.disabled = false; }
+};
+function alertDeleted() {
+  $('#delete-confirm').hidden = true; $('#delete-data').hidden = false;
+  $('#gate-note').textContent = 'Your data has been deleted. Thank you for trying Prescription Meditation.';
+  logOut().catch(() => {});
 }
 
 /* writing and managing memos */

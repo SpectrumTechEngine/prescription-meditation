@@ -19,7 +19,18 @@ service cloud.firestore {
     // Daily AI usage tally: every app adds to it, only the owner can read it.
     match /stats/{day} {
       allow read: if isOwner();
-      allow create, update: if signedIn() && request.resource.data.keys().hasOnly(['total', 'used', 'out']);
+      allow create, update: if signedIn() && request.resource.data.keys().hasOnly(['total', 'used', 'out', 'yt']);
+    }
+
+    // App stats: anonymous counts only (never names or anything anyone says).
+    // Every app adds to them, only the owner can read them.
+    match /metrics/{day} {
+      allow read: if isOwner();
+      allow create, update: if signedIn() && request.resource.data.keys().hasOnly([
+        'users', 'newUsers', 'active', 'activeWeek', 'consults', 'rx', 'rxFree', 'rxFull', 'swaps',
+        'aftercare', 'favs', 'dislikes', 'reasons', 'limitHit', 'crisis', 'aiFull',
+        'videoInApp', 'videoLink', 'techniques', 'teachers', 'deleted'
+      ]);
     }
   }
 }

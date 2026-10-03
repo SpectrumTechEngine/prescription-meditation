@@ -1,6 +1,13 @@
 import './style.css';
-import { configured, signIn, logOut, watchUser, watchPrescriptions, savePrescription, updatePrescription } from './firebase.js';
-import { MODES, askFollowUp, aftercareReply, writePrescription, errorCopy } from './doctor.js';
+import {
+  configured, signIn, logOut, watchUser, watchPrescriptions, savePrescription, updatePrescription,
+  OWNER_UID, getUserState, setUserState, fetchMemos, watchMemos, sendMemo, withdrawMemo,
+  recordUsage, recordOut, watchStats, statKey,
+} from './firebase.js';
+import {
+  MODES, askFollowUp, aftercareReply, writePrescription, errorCopy,
+  ALL_MODELS, restingOnThisDevice, setUsageReporter, lastModel,
+} from './doctor.js';
 import { youtubeEnabled, findVideo, searchUrl, watchUrl, validId } from './youtube.js';
 import { ringBell, isSoundOn, setSoundOn, BELL_SVG, drawBells } from './bell.js';
 
@@ -16,19 +23,25 @@ const S = {
   busy: false, ctl: null, lastRx: null,
   phase: 'intake',          // 'intake' → 'aftercare' (after a prescription) → 'closed' (free plan, done for today)
   currentRx: null, crisisShown: false, loaded: null,
+  stats: undefined, memos: [], unwatchOwner: [],
 };
 
 /* ---------- plan: free version for everyone, full version for the owner ---------- */
-const FULL_VERSION_EMAILS = ['stephencromwelldublin@gmail.com'];
-const isFull = () => FULL_VERSION_EMAILS.includes((S.user?.email || '').toLowerCase());
+const readPref = (k, d = null) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+const writePref = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
+const isOwner = () => !!S.user && S.user.uid === OWNER_UID;
+// The owner can preview the free version; that preview has its own test day so real use doesn't count.
+const previewing = () => isOwner() && readPref('pm-view-free') === '1';
+const isFull = () => isOwner() && !previewing();
+const testStart = () => Number(readPref('pm-test-start', '0')) || 0;
 const dublinDay = ms => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Dublin' }).format(new Date(ms));
 function todaysRxs() {
   const all = S.lastRx && !S.rxs.some(r => r.id === S.lastRx.id) ? [S.lastRx, ...S.rxs] : S.rxs;
   const today = dublinDay(Date.now());
-  return all.filter(r => r.at && dublinDay(r.at) === today);
+  return all.filter(r => r.at && dublinDay(r.at) === today && (!previewing() || (r.test && r.at >= testStart())));
 }
 // Backup count kept on the device too, so the daily limit holds even if the patient file can't be reached.
-const usageKey = () => 'pm-usage-' + (S.user?.uid || '');
+const usageKey = () => 'pm-usage-' + (previewing() ? 'preview-' : '') + (S.user?.uid || '');
 function localUsage() {
   try {
     const u = JSON.parse(localStorage.getItem(usageKey()));
@@ -65,6 +78,11 @@ function crisisCard() {
   card.append(ul, el('p', 'crisis-foot', "I'm still here, and we'll keep going together."));
   return card;
 }
+
+setUsageReporter({
+  used: model => { if (S.user) recordUsage(model).catch(() => {}); },
+  out: (model, until) => { if (S.user) recordOut(model, until).catch(() => {}); },
+});
 
 const BELL = BELL_SVG;
 drawBells();
@@ -111,7 +129,8 @@ $('#gate-bell').addEventListener('click', ringBell);
 if (!configured) show('setup');
 else watchUser(user => {
   S.unwatch?.(); S.unwatch = null;
-  S.user = user; S.rxs = [];
+  S.unwatchOwner.forEach(u => u()); S.unwatchOwner = [];
+  S.user = user; S.rxs = []; S.stats = undefined; S.memos = [];
   if (!user) { show('gate'); return; }
   let markLoaded; S.loaded = new Promise(r => { markLoaded = r; });
   setTimeout(() => markLoaded(), 5000);
@@ -122,16 +141,27 @@ else watchUser(user => {
   else patient.replaceChildren(el('span', '', name));
   S.unwatch = watchPrescriptions(user.uid, rxs => { S.rxs = rxs; renderLists(); markLoaded(); },
     err => { console.error(err); sysNote("Your patient file couldn't be loaded. Check the Firestore rules are deployed.", true); });
+  if (isOwner()) {
+    S.unwatchOwner.push(
+      watchStats(st => { S.stats = st; if (admin.open) renderAllowance(); }, e => { console.warn(e); S.stats = null; }),
+      watchMemos(list => { S.memos = list; if (admin.open) renderMemoList(); }, e => console.warn(e)),
+    );
+  }
   renderPlan();
   renderLists();
   greet();
+  S.loaded.then(checkMemo);
 });
 
 function renderPlan() {
   const full = isFull();
   const chip = $('#plan');
-  chip.textContent = full ? 'Full version' : 'Free plan';
+  chip.textContent = full ? 'Full version' : previewing() ? 'Free plan · preview' : 'Free plan';
   chip.classList.toggle('full', full);
+  chip.classList.toggle('owner', isOwner());
+  chip.disabled = !isOwner();
+  chip.title = isOwner() ? 'Open the admin menu' : '';
+  $('#preview-strip').hidden = !previewing();
   const deep = modeEl.querySelector('[data-mode="deep"]');
   deep.classList.toggle('premium', !full);
   deep.title = full ? '' : 'Part of the full version';
@@ -292,6 +322,7 @@ async function send(text) {
   setBusy(false);
   const reply = out.reply || 'Tell me a little more about that?';
   t.textContent = reply;
+  modelTag(t);
   S.turns.push({ role: 'assistant', content: reply });
   if (out.ready) { await wait(500); await prescribe(); }
 }
@@ -323,6 +354,7 @@ async function aftercare(text, mine) {
   setBusy(false);
   reply = reply || "Thank you for telling me. I'll keep that in mind for next time.";
   t.textContent = reply;
+  modelTag(t);
   S.turns.push({ role: 'assistant', content: reply });
   if (rx) {
     const note = [rx.afterNote, text].filter(Boolean).join(' / ').slice(0, 600);
@@ -385,11 +417,13 @@ async function prescribe(extra, { swap = false } = {}) {
   rx.mode = S.mode;
   rx.fav = false; rx.disliked = false; rx.dislikeReason = '';
   rx.swap = swap; rx.aftercare = 0; rx.afterNote = '';
+  rx.test = previewing();
 
   card.remove();
   const slip = renderSlip(rx, { context: 'chat' });
   slip.classList.add('arrive');
   thread.append(slip); scrollDown();
+  if (isOwner() && lastModel) slip.append(el('div', 'model-tag', 'Written by ' + lastModel));
   ringBell();
   setBusy(false);
   S.lastRx = rx;
@@ -539,6 +573,152 @@ function renderLists() {
   $('#file-list').replaceChildren(...(S.rxs.length ? S.rxs.map(r => renderSlip(r, { context: 'list' }))
     : [empty('Your file is empty', 'Each prescription Dr. Stillwell writes is filed here, with what you said at the time.')]));
   syncSlips();
+}
+
+/* ---------- owner-only: which model answered ---------- */
+function modelTag(t) {
+  if (!isOwner() || !lastModel) return;
+  t.closest('.bubble').append(el('div', 'model-tag', lastModel));
+}
+
+/* ---------- memos from Dr. Stillwell ---------- */
+const memoDlg = $('#memo');
+function showMemo(memo, onClose) {
+  $('#memo-body').textContent = memo.text;
+  $('#memo-date').textContent = fmtDate(memo.at || Date.now());
+  memoDlg.onclose = () => { memoDlg.onclose = null; onClose?.(); };
+  if (!memoDlg.open) memoDlg.showModal();
+}
+async function checkMemo() {
+  if (!S.user) return;
+  try {
+    const [memos, state] = await Promise.all([fetchMemos(), getUserState(S.user.uid)]);
+    const plan = isFull() ? 'full' : 'free';
+    const now = Date.now();
+    // Only the newest memo meant for this person, so pop-ups never stack up.
+    const memo = memos.find(m => !m.withdrawn && (!m.until || m.until > now) && (m.audience === 'all' || m.audience === plan));
+    if (!memo || state.memoSeen === memo.id) return;
+    showMemo(memo, () => setUserState(S.user.uid, { memoSeen: memo.id }).catch(e => console.warn(e)));
+  } catch (e) { console.warn('Memo check failed', e); }
+}
+
+/* ---------- admin menu (owner only) ---------- */
+const admin = $('#admin');
+const AUDIENCE = { all: 'everyone', free: 'free plan users', full: 'full version users' };
+const fmtWhen = ms => new Date(ms).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+
+$('#plan').onclick = () => {
+  if (!isOwner()) return;
+  renderViewAs(); renderAllowance(); renderMemoList();
+  $('#adm-test-note').textContent = ''; $('#memo-status').textContent = '';
+  admin.showModal();
+};
+
+function renderViewAs() {
+  const v = previewing() ? 'free' : 'full';
+  $('#view-as').querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.view === v)));
+}
+function switchView(free) {
+  writePref('pm-view-free', free ? '1' : null);
+  renderPlan(); renderViewAs();
+  if (admin.open) admin.close();
+  greet();
+}
+$('#view-as').querySelectorAll('button').forEach(b => (b.onclick = () => switchView(b.dataset.view === 'free')));
+$('#preview-exit').onclick = () => switchView(false);
+
+$('#adm-reset').onclick = () => {
+  writePref('pm-test-start', String(Date.now()));
+  writePref('pm-usage-preview-' + S.user.uid, null);
+  if (previewing()) { admin.close(); greet(); }
+  else $('#adm-test-note').textContent = 'Free test day reset. Switch to the free version to use it.';
+};
+$('#adm-welcome').onclick = () => {
+  writePref('pm-free-notice-' + S.user.uid, null);
+  if (previewing()) { admin.close(); greet(); }
+  else $('#adm-test-note').textContent = 'Done. Switch to the free version to see the welcome.';
+};
+$('#adm-crisis').onclick = () => {
+  admin.close(); showView('consult');
+  sysNote('Preview of the crisis card. Only you can see this.');
+  thread.append(crisisCard()); scrollDown();
+};
+
+function renderAllowance() {
+  const st = S.stats;
+  const total = st?.total || 0;
+  $('#adm-total').textContent = st === null ? "Today's figures couldn't be loaded."
+    : st === undefined ? 'Loading…'
+    : `${total} AI request${total === 1 ? '' : 's'} today across all users (about ${Math.round(total / 4)} consultation${Math.round(total / 4) === 1 ? '' : 's'}).`;
+  const here = restingOnThisDevice();
+  const now = Date.now();
+  $('#adm-models').replaceChildren(...ALL_MODELS.map(m => {
+    const k = statKey(m);
+    const until = Math.max(st?.out?.[k] || 0, here[m] || 0);
+    const tr = el('tr');
+    const status = el('td', until > now ? 'out' : 'ok', until > now ? 'Out until ' + fmtWhen(until) : 'Available');
+    tr.append(el('td', 'mono', m), el('td', 'num', String(st?.used?.[k] || 0)), status);
+    return tr;
+  }));
+}
+
+/* writing and managing memos */
+const memoText = $('#memo-text'), memoAudience = $('#memo-audience'), memoUntil = $('#memo-until');
+const memoStatus = t => { $('#memo-status').textContent = t; };
+function draftMemo() {
+  const text = memoText.value.trim();
+  if (!text) { memoStatus('Write a message first.'); memoText.focus(); return null; }
+  const until = memoUntil.value ? new Date(memoUntil.value + 'T23:59:59').getTime() : null;
+  if (until && until < Date.now()) { memoStatus('That end date has already passed.'); return null; }
+  return { text, audience: memoAudience.value, until };
+}
+$('#memo-preview').onclick = () => {
+  const d = draftMemo(); if (!d) return;
+  admin.close();
+  showMemo({ ...d, at: Date.now() }, () => admin.showModal());
+};
+$('#memo-send').onclick = () => {
+  const d = draftMemo(); if (!d) return;
+  $('#memo-confirm-text').textContent = `Send this memo to ${AUDIENCE[d.audience]}? They'll see it the next time they open the app.`;
+  $('#memo-confirm').hidden = false;
+};
+$('#memo-confirm-no').onclick = () => { $('#memo-confirm').hidden = true; };
+$('#memo-confirm-yes').onclick = async () => {
+  const d = draftMemo(); if (!d) return;
+  const yes = $('#memo-confirm-yes'); yes.disabled = true;
+  try {
+    await sendMemo({ ...d, at: Date.now(), withdrawn: false });
+    memoText.value = ''; memoUntil.value = ''; memoAudience.value = 'all';
+    $('#memo-confirm').hidden = true;
+    memoStatus('Memo sent.');
+  } catch (e) {
+    console.error(e);
+    memoStatus("The memo couldn't be sent. Check your connection and try again.");
+  } finally { yes.disabled = false; }
+};
+
+function renderMemoList() {
+  const list = $('#memo-list');
+  if (!S.memos.length) { list.replaceChildren(el('li', 'admin-note', 'No memos sent yet.')); return; }
+  const now = Date.now();
+  list.replaceChildren(...S.memos.map(m => {
+    const live = !m.withdrawn && (!m.until || m.until > now);
+    const li = el('li', live ? '' : 'gone');
+    const head = el('div', 'memo-item-head');
+    head.append(el('span', 'meta', `${fmtDate(m.at)} · ${AUDIENCE[m.audience] || 'everyone'}`),
+      el('span', 'memo-state', m.withdrawn ? 'Withdrawn' : live ? (m.until ? 'Live until ' + fmtDate(m.until) : 'Live') : 'Ended'));
+    li.append(head, el('p', '', m.text.length > 140 ? m.text.slice(0, 140) + '…' : m.text));
+    if (live) {
+      const w = el('button', 'btn small', 'Withdraw'); w.type = 'button';
+      w.onclick = async () => {
+        if (w.dataset.armed !== '1') { w.dataset.armed = '1'; w.textContent = 'Tap again to withdraw'; return; }
+        w.disabled = true;
+        try { await withdrawMemo(m.id); } catch (e) { console.error(e); memoStatus("That memo couldn't be withdrawn. Try again."); w.disabled = false; }
+      };
+      li.append(w);
+    }
+    return li;
+  }));
 }
 
 /* ---------- composer ---------- */

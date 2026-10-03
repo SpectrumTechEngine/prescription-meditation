@@ -31,6 +31,17 @@ function restFromError(model, msg) {
   rest(model, Date.now() + secs * 1000);
 }
 
+/** Every model the app may use, strongest first (for the admin allowance panel). */
+export const ALL_MODELS = [...new Set([...CHAINS.rx, ...CHAINS.intake])];
+/** When each model is resting on this device (ms timestamps), for the admin panel. */
+export const restingOnThisDevice = () => ({ ...resting });
+
+/** The model that answered the most recent request. */
+export let lastModel = '';
+/* The app can listen for usage (to keep the shared daily tally) without this file knowing about the database. */
+let reporter = { used() {}, out() {} };
+export function setUsageReporter(r) { reporter = { ...reporter, ...r }; }
+
 /** Thrown when every model has used up its free allowance. */
 export class FullForToday extends Error { constructor() { super('All models are out of free allowance'); this.code = 'full'; } }
 
@@ -47,12 +58,19 @@ async function runOnModels(kind, params, call, signal) {
     let p = params;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        return await call(geminiModel({ ...p, model: name }));
+        const result = await call(geminiModel({ ...p, model: name }));
+        lastModel = name;
+        try { reporter.used(name); } catch {}
+        return result;
       } catch (e) {
         if (e?.name === 'AbortError' || signal?.aborted) throw e;
         const msg = String(e?.message || '');
         last = e;
-        if (/\[429/.test(msg)) { restFromError(name, msg); break; }             // out of allowance → next model
+        if (/\[429/.test(msg)) {                                              // out of allowance → next model
+          restFromError(name, msg);
+          try { reporter.out(name, resting[name]); } catch {}
+          break;
+        }
         allQuota = false;
         if (/\[404/.test(msg)) { rest(name, Date.now() + 864e5); break; }       // model retired → next model
         if (/\[400/.test(msg) && /thinking/i.test(msg) && p.generationConfig?.thinkingConfig) {

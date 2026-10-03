@@ -1,9 +1,25 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Each person can read and write only their own prescriptions.
-    match /users/{uid}/prescriptions/{rxId} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+    function signedIn() { return request.auth != null; }
+    // The app's owner (full version and admin menu).
+    function isOwner() { return signedIn() && request.auth.uid == 'ZqRpCKk693SVUiwWDGDATZm2qPn2'; }
+
+    // Each person can read and write only their own data: prescriptions and app state.
+    match /users/{uid}/{document=**} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Memos from Dr. Stillwell: everyone signed in can read them, only the owner can write them.
+    match /memos/{memoId} {
+      allow read: if signedIn();
+      allow write: if isOwner();
+    }
+
+    // Daily AI usage tally: every app adds to it, only the owner can read it.
+    match /stats/{day} {
+      allow read: if isOwner();
+      allow create, update: if signedIn() && request.resource.data.keys().hasOnly(['total', 'used', 'out']);
     }
   }
 }

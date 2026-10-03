@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     // The app's owner (full version and admin menu).
-    function isOwner() { return signedIn() && request.auth.uid == 'ZqRpCKk693SVUiwWDGDATZm2qPn2'; }
+    function isOwner() { return signedIn() && request.auth.uid == 'x8NvbT0jySgMLRgH0gh5pn1Khyj2'; }
 
     // Each person can read and write only their own data: prescriptions and app state.
     match /users/{uid}/{document=**} {

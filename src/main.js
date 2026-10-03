@@ -3,7 +3,7 @@ import {
   configured, signIn, logOut, watchUser, watchPrescriptions, savePrescription, updatePrescription,
   OWNER_UID, getUserState, setUserState, fetchMemos, watchMemos, sendMemo, withdrawMemo,
   recordUsage, recordOut, watchStats, statKey,
-  recordYoutubeSearch, bumpMetrics, fetchMetrics, fetchTotals, dublinDay as irishDay, deleteMyData,
+  recordYoutubeSearch, bumpMetrics, fetchMetrics, fetchTotals, dublinDay as irishDay, deletePrescriptionHistory,
 } from './firebase.js';
 import {
   MODES, askFollowUp, aftercareReply, writePrescription, errorCopy,
@@ -775,7 +775,7 @@ async function renderStats() {
         tile(sum('aiFull'), '"consulting room full" shown'),
       ]),
       group('Safety', [tile(sum('crisis'), 'times the crisis card was shown')]),
-      el('p', 'admin-note', `Counts only, never names or what anyone said. Your own use isn't counted. Counting started on 3 Oct 2026.${sum('deleted') ? ` ${sum('deleted')} people deleted their data in this period.` : ''}`),
+      el('p', 'admin-note', `Counts only, never names or what anyone said. Your own use isn't counted. Counting started on 3 Oct 2026.${sum('deleted') ? ` ${sum('deleted')} people deleted their prescription history in this period.` : ''}`),
     );
   } catch (e) {
     console.error(e);
@@ -783,32 +783,22 @@ async function renderStats() {
   }
 }
 
-/* ---------- "Delete my data" (any user) ---------- */
-$('#delete-data').onclick = () => { $('#delete-confirm').hidden = false; $('#delete-data').hidden = true; };
+/* ---------- "Delete my prescription history" (any user; the account stays) ---------- */
+$('#delete-data').onclick = () => { $('#delete-confirm').hidden = false; $('#delete-data').hidden = true; $('#delete-status').textContent = ''; };
 $('#delete-no').onclick = () => { $('#delete-confirm').hidden = true; $('#delete-data').hidden = false; };
 $('#delete-yes').onclick = async () => {
   const yes = $('#delete-yes'); yes.disabled = true;
   $('#delete-status').textContent = 'Deleting…';
   try {
-    if (!isOwner()) await bumpMetrics({ deleted: 1 }).catch(() => {});
-    S.unwatch?.(); S.unwatch = null;
-    const uid = S.user.uid;
-    await deleteMyData();
-    try { Object.keys(localStorage).filter(k => k.includes(uid)).forEach(k => localStorage.removeItem(k)); } catch {}
-    $('#delete-status').textContent = '';
-    alertDeleted();
+    const n = await deletePrescriptionHistory(S.user.uid);
+    count({ deleted: 1 });
+    $('#delete-confirm').hidden = true; $('#delete-data').hidden = false;
+    $('#delete-status').textContent = n ? 'Your prescription history has been deleted.' : 'There was nothing to delete.';
   } catch (e) {
     console.error(e);
-    $('#delete-status').textContent = e?.code === 'auth/popup-closed-by-user'
-      ? 'Deletion needs you to confirm with Google. Tap delete again when you are ready.'
-      : "Something went wrong and not everything was deleted. Please try again.";
+    $('#delete-status').textContent = 'Something went wrong and not everything was deleted. Please try again.';
   } finally { yes.disabled = false; }
 };
-function alertDeleted() {
-  $('#delete-confirm').hidden = true; $('#delete-data').hidden = false;
-  $('#gate-note').textContent = 'Your data has been deleted. Thank you for trying Prescription Meditation.';
-  logOut().catch(() => {});
-}
 
 /* writing and managing memos */
 const memoText = $('#memo-text'), memoAudience = $('#memo-audience'), memoUntil = $('#memo-until');

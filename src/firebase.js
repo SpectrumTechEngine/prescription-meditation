@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, deleteUser, reauthenticateWithPopup } from 'firebase/auth';
-import { getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, limit, increment, writeBatch } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, updateDoc, onSnapshot, query, orderBy, limit, increment, writeBatch } from 'firebase/firestore';
 import { getAI, getGenerativeModel, GoogleAIBackend } from 'firebase/ai';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 
@@ -61,7 +61,7 @@ export function savePrescription(uid, rx) {
 export const updatePrescription = (uid, id, patch) => updateDoc(doc(rxCol(uid), id), patch);
 
 /* ---------- The owner (full version and admin menu), recognised by account ID ---------- */
-export const OWNER_UID = 'ZqRpCKk693SVUiwWDGDATZm2qPn2';
+export const OWNER_UID = 'x8NvbT0jySgMLRgH0gh5pn1Khyj2';
 
 /* ---------- Per-person app state: users/{uid}/meta/state (e.g. last memo seen) ---------- */
 const stateDoc = uid => doc(db, 'users', uid, 'meta', 'state');
@@ -113,12 +113,8 @@ export async function fetchTotals() {
   return s.exists() ? s.data() : {};
 }
 
-/* ---------- "Delete my data": everything this person has saved, then their sign-in ---------- */
-export async function deleteMyData() {
-  const user = auth.currentUser;
-  if (!user) return;
-  const uid = user.uid;
-  // Their prescriptions, in batches
+/* ---------- "Delete my prescription history": every saved prescription, keeping the account ---------- */
+export async function deletePrescriptionHistory(uid) {
   const snap = await getDocs(rxCol(uid));
   let batch = writeBatch(db), n = 0;
   for (const d of snap.docs) {
@@ -126,12 +122,5 @@ export async function deleteMyData() {
     if (++n === 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
   }
   if (n) await batch.commit();
-  await deleteDoc(stateDoc(uid));
-  // Their account; Google asks them to confirm it's them if they signed in a while ago
-  try { await deleteUser(user); }
-  catch (e) {
-    if (e?.code !== 'auth/requires-recent-login') throw e;
-    await reauthenticateWithPopup(user, new GoogleAuthProvider());
-    await deleteUser(user);
-  }
+  return snap.size;
 }

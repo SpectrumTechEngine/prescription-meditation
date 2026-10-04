@@ -417,9 +417,13 @@ function nextNo() {
   return 'RX-' + String(max + 1).padStart(4, '0');
 }
 
+// Shared usage numbers for the owner (ste-owner.js on the website). Counts only, never what anyone said
+const ste = (f, ...a) => { try { if (window.STE && window.STE[f]) window.STE[f](...a); } catch (e) { /* never in the way */ } };
+
 async function prescribe(extra, { swap = false } = {}) {
   if (S.busy) return;
   if (!(swap ? canSwap() : canConsult())) { S.phase = 'closed'; await doctorSays(CLOSED_LINE); return; }
+  ste('track', 'play'); ste('detail', swap ? 'meditation-swapped' : 'meditation-prescribed');
   setBusy(true); setNext();
   const card = el('div', 'writing');
   card.innerHTML = '<svg viewBox="0 0 64 24" aria-hidden="true"><path d="M2 16c6-10 9 6 14-2s7-6 10 0 6 4 10-3 7 1 10 3 8-2 16-4"/></svg>';
@@ -509,6 +513,7 @@ function player(rx) {
   poster.style.backgroundImage = `url("https://i.ytimg.com/vi/${rx.videoId}/hqdefault.jpg")`;
   const ring = el('span'); ring.innerHTML = ICON.play; poster.append(ring);
   poster.onclick = () => {
+    ste('detail', 'meditation-played');
     ringBell();
     const f = document.createElement('iframe');
     f.src = `https://www.youtube-nocookie.com/embed/${rx.videoId}?autoplay=1&rel=0&modestbranding=1`;

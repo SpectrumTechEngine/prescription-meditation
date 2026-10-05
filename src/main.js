@@ -1,4 +1,7 @@
 import './style.css';
+
+// Lets the app open offline once visited, and be installed as an app
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 import {
   configured, signIn, logOut, watchUser, watchPrescriptions, savePrescription, updatePrescription,
   OWNER_UID, getUserState, setUserState, fetchMemos, watchMemos, sendMemo, withdrawMemo,

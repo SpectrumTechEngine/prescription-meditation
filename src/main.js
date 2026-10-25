@@ -4,7 +4,7 @@ import './style.css';
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 import {
   configured, signIn, logOut, watchUser, watchPrescriptions, savePrescription, updatePrescription,
-  OWNER_UID, getUserState, setUserState, fetchMemos, watchMemos, sendMemo, withdrawMemo,
+  OWNER_UID, FULL_EMAILS, getUserState, setUserState, fetchMemos, watchMemos, sendMemo, withdrawMemo,
   recordUsage, recordOut, watchStats, statKey,
   recordYoutubeSearch, bumpMetrics, fetchMetrics, fetchTotals, dublinDay as irishDay, deletePrescriptionHistory,
 } from './firebase.js';
@@ -30,13 +30,14 @@ const S = {
   stats: undefined, memos: [], unwatchOwner: [],
 };
 
-/* ---------- plan: free version for everyone, full version for the owner ---------- */
+/* ---------- plan: free version for everyone, full version for the owner and FULL_EMAILS ---------- */
 const readPref = (k, d = null) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 const writePref = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
 const isOwner = () => !!S.user && S.user.uid === OWNER_UID;
 // The owner can preview the free version; that preview has its own test day so real use doesn't count.
 const previewing = () => isOwner() && readPref('pm-view-free') === '1';
-const isFull = () => isOwner() && !previewing();
+const hasFullEmail = () => !!S.user?.email && S.user.emailVerified && FULL_EMAILS.includes(S.user.email.toLowerCase());
+const isFull = () => (isOwner() && !previewing()) || hasFullEmail();
 const testStart = () => Number(readPref('pm-test-start', '0')) || 0;
 const dublinDay = ms => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Dublin' }).format(new Date(ms));
 function todaysRxs() {

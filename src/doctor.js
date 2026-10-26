@@ -47,8 +47,10 @@ export class FullForToday extends Error { constructor() { super('All models are 
 
 /**
  * Run one request on the first model in the chain that still has allowance, moving down the chain
- * when a model is out of allowance or unavailable, and retrying once on a passing hiccup.
+ * when a model is out of allowance, unavailable or not answering, and retrying once on a passing hiccup.
  */
+// How long a model may take to start answering before we give up on it and try the next one.
+const TIME_LIMIT = { intake: 20000, rx: 35000 };
 async function runOnModels(kind, params, call, signal) {
   const now = Date.now();
   let chain = CHAINS[kind].filter(m => !(resting[m] > now));
@@ -57,13 +59,29 @@ async function runOnModels(kind, params, call, signal) {
   for (const name of chain) {
     let p = params;
     for (let attempt = 0; attempt < 2; attempt++) {
+      // Its own stop switch: pressed by the patient's Stop button, or by the time limit.
+      const ctl = new AbortController();
+      const stop = () => ctl.abort();
+      signal?.addEventListener('abort', stop, { once: true });
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, TIME_LIMIT[kind] || 30000);
       try {
-        const result = await call(geminiModel({ ...p, model: name }));
+        const result = await call(geminiModel({ ...p, model: name }), ctl.signal);
+        clearTimeout(timer);
         lastModel = name;
         try { reporter.used(name); } catch {}
         return result;
       } catch (e) {
-        if (e?.name === 'AbortError' || signal?.aborted) throw e;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', stop);
+        if (signal?.aborted) throw e;
+        if (timedOut) {                                                       // not answering → next model
+          console.warn(name + ' did not answer in time; trying the next model');
+          rest(name, Date.now() + 36e5);
+          allQuota = false; last = e;
+          break;
+        }
+        if (e?.name === 'AbortError') throw e;
         const msg = String(e?.message || '');
         last = e;
         if (/\[429/.test(msg)) {                                              // out of allowance → next model
@@ -132,7 +150,7 @@ export async function askFollowUp({ turns, n, mode, onText, signal }) {
   const result = await runOnModels('intake', {
     systemInstruction: intakeInstruction(n, mode),
     generationConfig: { temperature: 0.8, maxOutputTokens: 2048, thinkingConfig: THINK.intake },
-  }, model => model.generateContentStream({ contents: toContents(turns) }, { signal }), signal);
+  }, (model, sig) => model.generateContentStream({ contents: toContents(turns) }, { signal: sig }), signal);
   let text = '';
   for await (const chunk of result.stream) {
     text += chunk.text();
@@ -159,7 +177,7 @@ How to reply:
   const result = await runOnModels('intake', {
     systemInstruction: system,
     generationConfig: { temperature: 0.8, maxOutputTokens: 2048, thinkingConfig: THINK.intake },
-  }, model => model.generateContentStream({ contents: toContents(turns) }, { signal }), signal);
+  }, (model, sig) => model.generateContentStream({ contents: toContents(turns) }, { signal: sig }), signal);
   let text = '';
   for await (const chunk of result.stream) {
     text += chunk.text();
@@ -244,7 +262,7 @@ function normalise(r) {
 export async function writePrescription({ turns, rxs, extra, signal }) {
   const result = await runOnModels('rx', {
     generationConfig: { temperature: 0.7, responseMimeType: 'application/json', maxOutputTokens: 8192, thinkingConfig: THINK.rx },
-  }, model => model.generateContent(prescriptionPrompt(turns, rxs, extra), { signal }), signal);
+  }, (model, sig) => model.generateContent(prescriptionPrompt(turns, rxs, extra), { signal: sig }), signal);
   const parsed = parseJson(result.response.text());
   if (!parsed) throw { code: 'invalid_json' };
   return normalise(parsed);

@@ -63,7 +63,7 @@ export const updatePrescription = (uid, id, patch) => updateDoc(doc(rxCol(uid), 
 /* ---------- The owner (full version and admin menu), recognised by account ID ---------- */
 export const OWNER_UID = 'x8NvbT0jySgMLRgH0gh5pn1Khyj2';
 // Other people who get the full version (no admin menu), matched on their Google sign-in email, lower case.
-export const FULL_EMAILS = ['c007oh@gmail.com'];
+export const FULL_EMAILS = ['c007oh@gmail.com', 'sanderlinn80@gmail.com'];
 
 /* ---------- Per-person app state: users/{uid}/meta/state (e.g. last memo seen) ---------- */
 const stateDoc = uid => doc(db, 'users', uid, 'meta', 'state');
